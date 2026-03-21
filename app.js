@@ -1126,7 +1126,7 @@
     }
 
     const before = clonePoint(getPoint(state.currentVideoIndex, state.currentId, state.currentFrame));
-    setPointValue(state.currentVideoIndex, state.currentId, state.currentFrame, worldPoint, { center: true });
+    setPointValue(state.currentVideoIndex, state.currentId, state.currentFrame, worldPoint);
     state.interaction = {
       type: "point",
       pointerId: event.pointerId,
@@ -1234,6 +1234,9 @@
       }
 
       if (!interaction.deletedByLongPress) {
+        if (!pointsEqual(interaction.before, after) && after) {
+          maybeCenterViewOnPoint(after);
+        }
         handleAutoAdvanceAfterPoint();
       } else {
         updateAllUi();
@@ -1752,24 +1755,43 @@
       return 0;
     }
     const frameDuration = 1 / video.fps;
-    const unclamped = frameIndex * frameDuration;
-    return Math.min(Math.max(0, unclamped), Math.max(0, video.duration - 0.001));
+    const unclamped = (frameIndex + 0.5) * frameDuration;
+    return Math.min(Math.max(0, unclamped), Math.max(0, video.duration - Math.min(0.001, frameDuration * 0.25)));
   }
 
   function seekVideo(video, time) {
+    return attemptVideoSeek(video, time, 2);
+  }
+
+  function attemptVideoSeek(video, time, retriesLeft) {
     return new Promise((resolve, reject) => {
-      if (Math.abs(video.element.currentTime - time) < 0.0005) {
-        waitForVideoFrame(video.element).then(resolve).catch(reject);
+      const frameTolerance = video.fps ? 0.5 / video.fps : 0.02;
+      const targetTime = Math.min(Math.max(0, time), Math.max(0, video.duration - 0.0005));
+
+      if (Math.abs(video.element.currentTime - targetTime) < frameTolerance * 0.25) {
+        waitForVideoFrame(video.element).then(() => {
+          waitForPresentedVideoFrame(video.element).then(resolve).catch(reject);
+        }).catch(reject);
         return;
       }
+
       const cleanup = () => {
         video.element.removeEventListener("seeked", onSeeked);
         video.element.removeEventListener("error", onError);
       };
       const onSeeked = () => {
         waitForVideoFrame(video.element).then(() => {
-          cleanup();
-          resolve();
+          waitForPresentedVideoFrame(video.element).then(() => {
+            cleanup();
+            if (retriesLeft > 0 && Math.abs(video.element.currentTime - targetTime) > frameTolerance) {
+              attemptVideoSeek(video, targetTime, retriesLeft - 1).then(resolve).catch(reject);
+              return;
+            }
+            resolve();
+          }).catch((error) => {
+            cleanup();
+            reject(error);
+          });
         }).catch((error) => {
           cleanup();
           reject(error);
@@ -1779,9 +1801,38 @@
         cleanup();
         reject(new Error("seek error"));
       };
+
+      video.element.pause();
       video.element.addEventListener("seeked", onSeeked, { once: true });
       video.element.addEventListener("error", onError, { once: true });
-      video.element.currentTime = time;
+      video.element.currentTime = targetTime;
+    });
+  }
+
+  function waitForPresentedVideoFrame(video) {
+    return new Promise((resolve) => {
+      if (typeof video.requestVideoFrameCallback !== "function") {
+        resolve();
+        return;
+      }
+
+      let resolved = false;
+      const finish = () => {
+        if (resolved) {
+          return;
+        }
+        resolved = true;
+        resolve();
+      };
+      const callbackId = video.requestVideoFrameCallback(() => {
+        finish();
+      });
+      window.setTimeout(() => {
+        if (!resolved && typeof video.cancelVideoFrameCallback === "function") {
+          video.cancelVideoFrameCallback(callbackId);
+        }
+        finish();
+      }, 120);
     });
   }
 
