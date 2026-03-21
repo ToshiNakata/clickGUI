@@ -167,28 +167,46 @@
       return;
     }
 
-    if (state.videos.length && state.dirty && !window.confirm("未保存の変更があります。新しい動画を読み込むと現在の作業を破棄します。続けますか？")) {
+    const existingKeys = new Set(state.videos.map((video) => makeVideoKey(video.file)));
+    const newFiles = files.filter((file) => !existingKeys.has(makeVideoKey(file)));
+    if (!newFiles.length) {
+      alert("選択した動画はすでに読み込み済みです。");
       return;
     }
 
     const fps = readPositiveNumber(els.fpsInput.value, state.defaultFps);
     state.defaultFps = fps;
+    let loadedVideos = [];
 
     try {
-      const loadedVideos = await Promise.all(files.map((file, index) => createVideoEntry(file, fps, index)));
-      releaseAllVideos();
-      state.videos = loadedVideos;
-      state.currentVideoIndex = 0;
-      state.currentFrame = 0;
-      state.currentId = clamp(state.currentId, 0, Math.max(0, state.idCount - 1));
-      state.history = [];
-      state.future = [];
-      createBlankAnnotations(state.idCount);
-      markCleanBaseline();
+      const startIndex = state.videos.length;
+      for (let index = 0; index < newFiles.length; index += 1) {
+        loadedVideos.push(await createVideoEntry(newFiles[index], fps, startIndex + index));
+      }
+
+      if (!state.videos.length) {
+        state.videos = loadedVideos;
+        state.currentVideoIndex = 0;
+        state.currentFrame = 0;
+        state.currentId = clamp(state.currentId, 0, Math.max(0, state.idCount - 1));
+        state.history = [];
+        state.future = [];
+        createBlankAnnotations(state.idCount);
+        markCleanBaseline();
+      } else {
+        appendVideoEntries(loadedVideos);
+        state.currentVideoIndex = startIndex;
+        state.currentFrame = 0;
+        state.currentId = clamp(state.currentId, 0, Math.max(0, state.idCount - 1));
+        refreshDirtyState();
+      }
+
       updateAllUi();
       await renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true });
     } catch (error) {
-      releaseAllVideos();
+      if (loadedVideos.length) {
+        releaseVideoEntries(loadedVideos);
+      }
       alert(`動画を読み込めませんでした: ${error.message}`);
       updateAllUi();
       drawEmptyState();
@@ -336,18 +354,30 @@
   }
 
   function releaseAllVideos() {
-    state.videos.forEach((video) => {
+    releaseVideoEntries(state.videos);
+    state.videos = [];
+    state.annotations = { x: [], y: [] };
+    state.currentVideoIndex = 0;
+    state.currentFrame = 0;
+    state.currentId = 0;
+  }
+
+  function releaseVideoEntries(videos) {
+    videos.forEach((video) => {
       video.element.pause();
       video.element.removeAttribute("src");
       video.element.load();
       video.element.remove();
       URL.revokeObjectURL(video.url);
     });
-    state.videos = [];
-    state.annotations = { x: [], y: [] };
-    state.currentVideoIndex = 0;
-    state.currentFrame = 0;
-    state.currentId = 0;
+  }
+
+  function appendVideoEntries(videos) {
+    videos.forEach((video) => {
+      state.videos.push(video);
+      state.annotations.x.push(Array.from({ length: state.idCount }, () => Array(video.frameCount).fill(null)));
+      state.annotations.y.push(Array.from({ length: state.idCount }, () => Array(video.frameCount).fill(null)));
+    });
   }
 
   function createBlankAnnotations(idCount) {
@@ -864,6 +894,7 @@
       return;
     }
 
+    els.canvasEmpty.hidden = true;
     const transform = getVideoTransform(video);
     drawBackdrop(rect.width, rect.height);
     displayCtx.drawImage(frameCanvas, transform.originX, transform.originY, transform.drawWidth, transform.drawHeight);
@@ -976,6 +1007,7 @@
   function drawEmptyState() {
     const rect = els.canvasWrap.getBoundingClientRect();
     displayCtx.clearRect(0, 0, rect.width, rect.height);
+    els.canvasEmpty.hidden = false;
     drawBackdrop(rect.width, rect.height);
   }
 

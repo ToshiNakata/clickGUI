@@ -312,8 +312,13 @@ input[type="range"] {
   color: rgba(241, 245, 246, 0.72);
   font-size: 1.05rem;
   letter-spacing: 0.04em;
+  pointer-events: none;
   background:
     linear-gradient(160deg, rgba(7, 12, 14, 0.7), rgba(18, 27, 31, 0.4));
+}
+
+.canvas-empty[hidden] {
+  display: none !important;
 }
 
 .control-panel {
