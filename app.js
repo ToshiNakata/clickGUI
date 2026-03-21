@@ -161,24 +161,24 @@
   }
 
   async function handleVideoInput(event) {
-    const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("video/"));
+    const files = Array.from(event.target.files || []).filter(isLikelyVideoFile);
     event.target.value = "";
     if (!files.length) {
+      alert("動画ファイルを選択してください。");
       return;
     }
-
-    const existingKeys = new Set(state.videos.map((video) => makeVideoKey(video.file)));
-    const newFiles = files.filter((file) => !existingKeys.has(makeVideoKey(file)));
-    if (!newFiles.length) {
-      alert("選択した動画はすでに読み込み済みです。");
-      return;
-    }
-
-    const fps = readPositiveNumber(els.fpsInput.value, state.defaultFps);
-    state.defaultFps = fps;
     let loadedVideos = [];
 
     try {
+      const existingKeys = new Set(state.videos.map((video) => makeVideoKey(video.file)));
+      const newFiles = files.filter((file) => !existingKeys.has(makeVideoKey(file)));
+      if (!newFiles.length) {
+        alert("選択した動画はすでに読み込み済みです。");
+        return;
+      }
+
+      const fps = readPositiveNumber(els.fpsInput.value, state.defaultFps);
+      state.defaultFps = fps;
       const startIndex = state.videos.length;
       for (let index = 0; index < newFiles.length; index += 1) {
         loadedVideos.push(await createVideoEntry(newFiles[index], fps, startIndex + index));
@@ -331,23 +331,69 @@
 
   function waitForVideoMetadata(video) {
     return new Promise((resolve, reject) => {
-      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+      if (video.readyState >= 1 && video.videoWidth > 0 && video.videoHeight > 0) {
         resolve();
         return;
       }
       const cleanup = () => {
+        video.removeEventListener("loadedmetadata", onLoaded);
         video.removeEventListener("loadeddata", onLoaded);
+        video.removeEventListener("canplay", onLoaded);
         video.removeEventListener("error", onError);
+        clearTimeout(timeoutId);
       };
       const onLoaded = () => {
-        cleanup();
-        resolve();
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          cleanup();
+          resolve();
+        }
       };
       const onError = () => {
         cleanup();
         reject(new Error("metadata error"));
       };
+      const timeoutId = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("metadata timeout"));
+      }, 15000);
+      video.addEventListener("loadedmetadata", onLoaded, { once: true });
       video.addEventListener("loadeddata", onLoaded, { once: true });
+      video.addEventListener("canplay", onLoaded, { once: true });
+      video.addEventListener("error", onError, { once: true });
+      video.load();
+    });
+  }
+
+  function waitForVideoFrame(video) {
+    return new Promise((resolve, reject) => {
+      if (video.readyState >= 2) {
+        resolve();
+        return;
+      }
+      const cleanup = () => {
+        video.removeEventListener("loadeddata", onReady);
+        video.removeEventListener("canplay", onReady);
+        video.removeEventListener("seeked", onReady);
+        video.removeEventListener("error", onError);
+        clearTimeout(timeoutId);
+      };
+      const onReady = () => {
+        if (video.readyState >= 2) {
+          cleanup();
+          resolve();
+        }
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error("frame load error"));
+      };
+      const timeoutId = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("frame load timeout"));
+      }, 15000);
+      video.addEventListener("loadeddata", onReady, { once: true });
+      video.addEventListener("canplay", onReady, { once: true });
+      video.addEventListener("seeked", onReady, { once: true });
       video.addEventListener("error", onError, { once: true });
       video.load();
     });
@@ -1500,7 +1546,7 @@
   function seekVideo(video, time) {
     return new Promise((resolve, reject) => {
       if (Math.abs(video.element.currentTime - time) < 0.0005) {
-        waitForVideoMetadata(video.element).then(resolve).catch(reject);
+        waitForVideoFrame(video.element).then(resolve).catch(reject);
         return;
       }
       const cleanup = () => {
@@ -1508,8 +1554,13 @@
         video.element.removeEventListener("error", onError);
       };
       const onSeeked = () => {
-        cleanup();
-        resolve();
+        waitForVideoFrame(video.element).then(() => {
+          cleanup();
+          resolve();
+        }).catch((error) => {
+          cleanup();
+          reject(error);
+        });
       };
       const onError = () => {
         cleanup();
@@ -1523,6 +1574,17 @@
 
   function computeFrameCount(duration, fps) {
     return Math.max(1, Math.round(duration * fps));
+  }
+
+  function makeVideoKey(file) {
+    return [file.name, file.size, file.lastModified].join("::");
+  }
+
+  function isLikelyVideoFile(file) {
+    if (file.type && file.type.startsWith("video/")) {
+      return true;
+    }
+    return /\.(mp4|mov|m4v|avi|webm|ogv|mpeg|mpg)$/i.test(file.name || "");
   }
 
   function inferIdCountFromPayload(x) {
