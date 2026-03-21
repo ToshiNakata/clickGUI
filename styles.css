@@ -345,7 +345,8 @@ input[type="range"] {
 
 .inline-actions,
 .inline-row,
-.frame-controls {
+.frame-controls,
+.stepper-row {
   display: flex;
   gap: 10px;
   align-items: center;
@@ -363,6 +364,17 @@ input[type="range"] {
 .frame-button {
   min-width: 58px;
   font-size: 1.1rem;
+}
+
+.mini-stepper {
+  min-width: 46px;
+  min-height: 46px;
+  padding: 0;
+  flex: 0 0 46px;
+}
+
+.stepper-row input {
+  min-width: 0;
 }
 
 .field-grid {

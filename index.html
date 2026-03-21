@@ -67,11 +67,19 @@
           <div class="field-grid">
             <label class="field">
               <span>現在ID</span>
-              <input id="currentIdInput" type="number" min="1" step="1" value="1">
+              <div class="stepper-row">
+                <button id="decreaseCurrentIdButton" class="mini-stepper" type="button">-</button>
+                <input id="currentIdInput" type="number" min="1" step="1" value="1">
+                <button id="increaseCurrentIdButton" class="mini-stepper" type="button">+</button>
+              </div>
             </label>
             <label class="field">
               <span>ID数</span>
-              <input id="idCountInput" type="number" min="1" step="1" value="10">
+              <div class="stepper-row">
+                <button id="decreaseIdCountButton" class="mini-stepper" type="button">-</button>
+                <input id="idCountInput" type="number" min="1" step="1" value="10">
+                <button id="increaseIdCountButton" class="mini-stepper" type="button">+</button>
+              </div>
             </label>
           </div>
           <div class="field-grid">
@@ -114,7 +122,11 @@
           </label>
           <label class="field">
             <span>フレーム移動幅</span>
-            <input id="stepFramesInput" type="number" min="1" step="1" value="1">
+            <div class="stepper-row">
+              <button id="decreaseStepFramesButton" class="mini-stepper" type="button">-</button>
+              <input id="stepFramesInput" type="number" min="1" step="1" value="1">
+              <button id="increaseStepFramesButton" class="mini-stepper" type="button">+</button>
+            </div>
           </label>
         </section>
 

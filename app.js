@@ -5,6 +5,7 @@
   const MIN_VIEW_SCALE = 0.3;
   const MAX_VIEW_SCALE = 12;
   const HISTORY_LIMIT = 500;
+  const AUTOSAVE_STORAGE_KEY = "clickiPad.autosave.v1";
 
   const state = {
     videos: [],
@@ -24,6 +25,7 @@
     lastSavedSnapshot: null,
     history: [],
     future: [],
+    pendingAutosaveRestore: null,
     interaction: null,
     navGesture: null,
     touchGesture: null,
@@ -52,7 +54,11 @@
     undoButton: document.getElementById("undoButton"),
     redoButton: document.getElementById("redoButton"),
     currentIdInput: document.getElementById("currentIdInput"),
+    decreaseCurrentIdButton: document.getElementById("decreaseCurrentIdButton"),
+    increaseCurrentIdButton: document.getElementById("increaseCurrentIdButton"),
     idCountInput: document.getElementById("idCountInput"),
+    decreaseIdCountButton: document.getElementById("decreaseIdCountButton"),
+    increaseIdCountButton: document.getElementById("increaseIdCountButton"),
     trailFramesInput: document.getElementById("trailFramesInput"),
     fpsInput: document.getElementById("fpsInput"),
     jumpMissingButton: document.getElementById("jumpMissingButton"),
@@ -65,6 +71,8 @@
     frameNumberInput: document.getElementById("frameNumberInput"),
     frameSlider: document.getElementById("frameSlider"),
     stepFramesInput: document.getElementById("stepFramesInput"),
+    decreaseStepFramesButton: document.getElementById("decreaseStepFramesButton"),
+    increaseStepFramesButton: document.getElementById("increaseStepFramesButton"),
     gammaInput: document.getElementById("gammaInput"),
     gammaValue: document.getElementById("gammaValue"),
     videoPool: document.getElementById("videoPool"),
@@ -78,6 +86,7 @@
   init();
 
   function init() {
+    initializeAutosaveRecovery();
     bindEvents();
     resizeCanvas();
     updateAllUi();
@@ -98,7 +107,11 @@
     els.resetViewButton.addEventListener("click", resetActiveView);
     els.annotateModeButton.addEventListener("click", () => setMode("annotate"));
     els.navigateModeButton.addEventListener("click", () => setMode("navigate"));
+    els.decreaseCurrentIdButton.addEventListener("click", () => setCurrentId(state.currentId - 1));
+    els.increaseCurrentIdButton.addEventListener("click", () => setCurrentId(state.currentId + 1));
     els.currentIdInput.addEventListener("change", () => setCurrentId(readPositiveInteger(els.currentIdInput.value, 1) - 1));
+    els.decreaseIdCountButton.addEventListener("click", () => setIdCount(state.idCount - 1));
+    els.increaseIdCountButton.addEventListener("click", () => setIdCount(state.idCount + 1));
     els.idCountInput.addEventListener("change", () => setIdCount(readPositiveInteger(els.idCountInput.value, state.idCount)));
     els.trailFramesInput.addEventListener("change", () => {
       state.trailFrames = Math.max(0, readPositiveInteger(els.trailFramesInput.value, state.trailFrames));
@@ -108,9 +121,10 @@
     els.centerAfterPointInput.addEventListener("change", () => {
       state.centerAfterPoint = els.centerAfterPointInput.checked;
     });
+    els.decreaseStepFramesButton.addEventListener("click", () => setFrameStep(state.frameStep - 1));
+    els.increaseStepFramesButton.addEventListener("click", () => setFrameStep(state.frameStep + 1));
     els.stepFramesInput.addEventListener("change", () => {
-      state.frameStep = Math.max(1, readPositiveInteger(els.stepFramesInput.value, state.frameStep));
-      updateAllUi();
+      setFrameStep(readPositiveInteger(els.stepFramesInput.value, state.frameStep));
     });
     els.gammaInput.addEventListener("input", () => {
       state.gamma = clamp(readPositiveNumber(els.gammaInput.value, 1), 0.1, 2);
@@ -157,7 +171,10 @@
     }
 
     window.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", persistAutosaveSnapshot);
     window.addEventListener("beforeunload", (event) => {
+      persistAutosaveSnapshot();
       if (!state.dirty) {
         return;
       }
@@ -207,6 +224,7 @@
         refreshDirtyState();
       }
 
+      maybeApplyPendingAutosaveRestore();
       updateAllUi();
       await renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true });
     } catch (error) {
@@ -471,6 +489,11 @@
     renderFrameIfReady();
   }
 
+  function setFrameStep(nextStep) {
+    state.frameStep = Math.max(1, nextStep);
+    updateAllUi();
+  }
+
   function resizeIdArray(targetArray, nextCount, frameCount) {
     while (targetArray.length < nextCount) {
       targetArray.push(Array(frameCount).fill(null));
@@ -661,6 +684,136 @@
       anchor.remove();
     }, 1000);
     markCleanBaseline();
+    clearAutosaveSnapshot();
+    updateAllUi();
+  }
+
+  function initializeAutosaveRecovery() {
+    const payload = readAutosaveSnapshot();
+    if (!payload) {
+      return;
+    }
+
+    if (window.confirm("前回の中断データがあります。復元しますか？")) {
+      state.pendingAutosaveRestore = payload;
+      return;
+    }
+
+    clearAutosaveSnapshot();
+  }
+
+  function handleVisibilityChange() {
+    if (document.visibilityState === "hidden") {
+      persistAutosaveSnapshot();
+    }
+  }
+
+  function persistAutosaveSnapshot() {
+    if (!state.videos.length) {
+      return;
+    }
+
+    try {
+      localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(buildPersistencePayload()));
+    } catch (error) {
+      console.warn("autosave failed", error);
+    }
+  }
+
+  function readAutosaveSnapshot() {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      const payload = JSON.parse(raw);
+      if (!payload || !Array.isArray(payload.x) || !Array.isArray(payload.y)) {
+        clearAutosaveSnapshot();
+        return null;
+      }
+      return payload;
+    } catch (error) {
+      clearAutosaveSnapshot();
+      return null;
+    }
+  }
+
+  function clearAutosaveSnapshot() {
+    try {
+      localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+    } catch (error) {
+      console.warn("autosave clear failed", error);
+    }
+  }
+
+  function maybeApplyPendingAutosaveRestore() {
+    if (!state.pendingAutosaveRestore) {
+      return false;
+    }
+
+    const payload = state.pendingAutosaveRestore;
+    const expectedMovieCount = readPositiveInteger(payload.n_movie, payload.videos ? payload.videos.length : 0);
+    if (!expectedMovieCount || state.videos.length !== expectedMovieCount) {
+      return false;
+    }
+
+    if (Array.isArray(payload.videos) && payload.videos.length === state.videos.length) {
+      const namesMismatch = payload.videos.some((savedVideo, index) => {
+        const currentVideo = state.videos[index];
+        return savedVideo && savedVideo.name && currentVideo && currentVideo.name && savedVideo.name !== currentVideo.name;
+      });
+      if (namesMismatch && !window.confirm("バックアップ時の動画名と現在読み込んだ動画名が一致しません。復元を続けますか？")) {
+        return false;
+      }
+    }
+
+    applyAutosaveRestore(payload);
+    state.pendingAutosaveRestore = null;
+    return true;
+  }
+
+  function applyAutosaveRestore(payload) {
+    if (Array.isArray(payload.videos) && payload.videos.length === state.videos.length) {
+      state.videos.forEach((video, index) => {
+        const savedVideo = payload.videos[index] || {};
+        const savedFps = readPositiveNumber(savedVideo.fps, video.fps);
+        video.fps = savedFps;
+        video.frameCount = Math.max(1, readPositiveInteger(savedVideo.frameCount, computeFrameCount(video.duration, savedFps)));
+        video.renderedFrame = null;
+        video.renderedGamma = null;
+      });
+    }
+
+    const nextIdCount = Math.max(1, readPositiveInteger(payload.n_point || payload.idCount, state.idCount));
+    state.idCount = nextIdCount;
+    createBlankAnnotations(nextIdCount);
+
+    state.videos.forEach((video, videoIndex) => {
+      for (let idIndex = 0; idIndex < state.idCount; idIndex += 1) {
+        const savedX = payload.x[videoIndex] && payload.x[videoIndex][idIndex] ? payload.x[videoIndex][idIndex] : [];
+        const savedY = payload.y[videoIndex] && payload.y[videoIndex][idIndex] ? payload.y[videoIndex][idIndex] : [];
+        for (let frameIndex = 0; frameIndex < video.frameCount; frameIndex += 1) {
+          const x = sanitizeCoordinate(savedX[frameIndex]);
+          const y = sanitizeCoordinate(savedY[frameIndex]);
+          setPointValue(videoIndex, idIndex, frameIndex, x !== null && y !== null ? { x, y } : null);
+        }
+      }
+    });
+
+    state.calibration = payload.calibration !== undefined ? payload.calibration : state.calibration;
+    state.currentVideoIndex = clamp(readMaybeInteger(payload.currentVideoIndex, 0), 0, Math.max(0, state.videos.length - 1));
+    state.currentFrame = clamp(readMaybeInteger(payload.currentFrame, 0), 0, Math.max(0, getCurrentFrameCount() - 1));
+    state.currentId = clamp(readMaybeInteger(payload.currentId, 0), 0, Math.max(0, state.idCount - 1));
+    state.frameStep = Math.max(1, readPositiveInteger(payload.frameStep, state.frameStep));
+    state.gamma = clamp(readPositiveNumber(payload.gamma, state.gamma), 0.1, 2);
+    state.autoAdvance = ["frame", "id", "none"].includes(payload.autoAdvance) ? payload.autoAdvance : state.autoAdvance;
+    state.centerAfterPoint = typeof payload.centerAfterPoint === "boolean" ? payload.centerAfterPoint : state.centerAfterPoint;
+    state.trailFrames = Math.max(0, readPositiveInteger(payload.trailFrames, state.trailFrames));
+    state.defaultFps = readPositiveNumber(payload.defaultFps, state.defaultFps);
+    state.history = [];
+    state.future = [];
+    state.lastSavedSnapshot = null;
+    state.dirty = true;
     updateAllUi();
   }
 
@@ -674,7 +827,12 @@
       currentVideoIndex: state.currentVideoIndex,
       currentFrame: state.currentFrame,
       currentId: state.currentId,
+      frameStep: state.frameStep,
+      gamma: state.gamma,
+      autoAdvance: state.autoAdvance,
+      centerAfterPoint: state.centerAfterPoint,
       trailFrames: state.trailFrames,
+      defaultFps: state.defaultFps,
       videos: state.videos.map((video) => ({
         name: video.name,
         width: video.width,
@@ -699,8 +857,14 @@
       state.dirty = false;
       return;
     }
+    persistAutosaveSnapshot();
+    if (state.lastSavedSnapshot === null) {
+      state.dirty = true;
+      updateAllUi();
+      return;
+    }
     const currentSnapshot = JSON.stringify(buildPersistencePayload());
-    state.dirty = state.lastSavedSnapshot !== null && currentSnapshot !== state.lastSavedSnapshot;
+    state.dirty = currentSnapshot !== state.lastSavedSnapshot;
     updateAllUi();
   }
 
@@ -833,8 +997,12 @@
       els.redoButton,
       els.deletePointButton,
       els.jumpMissingButton,
+      els.decreaseCurrentIdButton,
       els.currentIdInput,
+      els.increaseCurrentIdButton,
+      els.decreaseIdCountButton,
       els.idCountInput,
+      els.increaseIdCountButton,
       els.trailFramesInput,
       els.fpsInput,
       els.centerAfterPointInput,
@@ -842,7 +1010,9 @@
       els.nextFrameButton,
       els.frameNumberInput,
       els.frameSlider,
+      els.decreaseStepFramesButton,
       els.stepFramesInput,
+      els.increaseStepFramesButton,
       els.gammaInput,
       els.resetViewButton,
     ];
@@ -1568,6 +1738,10 @@
       return;
     }
 
+    if (isEditableTarget(event.target) || isEditableTarget(document.activeElement)) {
+      return;
+    }
+
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
       event.preventDefault();
       undo();
@@ -1902,6 +2076,14 @@
   function readMaybeInteger(value, fallback) {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  function isEditableTarget(target) {
+    if (!target) {
+      return false;
+    }
+    const tagName = target.tagName;
+    return target.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
   }
 
   function clamp(value, min, max) {
