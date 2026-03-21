@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>clickiPad</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="header-copy">
+        <p class="eyebrow">Browser-Based Video Annotation</p>
+        <h1>clickiPad</h1>
+        <p class="header-note">Apple Pencil を前提にした、サーバー不要の動画打点ツール</p>
+      </div>
+      <div class="header-actions">
+        <label class="button-like file-trigger">
+          動画を開く
+          <input id="videoInput" type="file" accept="video/*" multiple hidden>
+        </label>
+        <label class="button-like file-trigger muted-action">
+          打点JSONを読む
+          <input id="annotationInput" type="file" accept=".json,application/json" hidden>
+        </label>
+        <label class="button-like file-trigger muted-action">
+          キャリブ読み込み
+          <input id="calibrationInput" type="file" accept=".json,application/json" hidden>
+        </label>
+        <button id="saveButton" class="primary-action" type="button">保存</button>
+        <div id="dirtyChip" class="status-chip clean">Saved</div>
+      </div>
+    </header>
+
+    <nav id="videoTabs" class="video-tabs" aria-label="Loaded videos"></nav>
+
+    <main class="workspace">
+      <section class="stage-panel">
+        <div class="stage-toolbar">
+          <div class="segmented-control" role="group" aria-label="Mode">
+            <button id="annotateModeButton" class="mode-button active" data-mode="annotate" type="button">打点モード</button>
+            <button id="navigateModeButton" class="mode-button" data-mode="navigate" type="button">画面操作モード</button>
+          </div>
+          <div class="stage-readout">
+            <span id="videoInfoLabel">動画未読込</span>
+            <span id="frameInfoLabel">Frame - / -</span>
+            <button id="resetViewButton" class="ghost-button" type="button">表示をリセット</button>
+          </div>
+        </div>
+
+        <div id="canvasWrap" class="canvas-wrap">
+          <canvas id="mainCanvas"></canvas>
+          <div id="canvasEmpty" class="canvas-empty">動画を読み込んでください</div>
+        </div>
+      </section>
+
+      <aside class="control-panel">
+        <section class="control-card">
+          <div class="card-header">
+            <h2>打点</h2>
+            <div class="inline-actions">
+              <button id="undoButton" class="ghost-button" type="button">Undo</button>
+              <button id="redoButton" class="ghost-button" type="button">Redo</button>
+            </div>
+          </div>
+          <div class="field-grid">
+            <label class="field">
+              <span>現在ID</span>
+              <input id="currentIdInput" type="number" min="1" step="1" value="1">
+            </label>
+            <label class="field">
+              <span>ID数</span>
+              <input id="idCountInput" type="number" min="1" step="1" value="10">
+            </label>
+          </div>
+          <div class="field-grid">
+            <label class="field">
+              <span>軌跡表示</span>
+              <input id="trailFramesInput" type="number" min="0" step="1" value="5">
+            </label>
+            <label class="field">
+              <span>FPS</span>
+              <input id="fpsInput" type="number" min="1" step="0.01" value="30">
+            </label>
+          </div>
+          <div class="inline-row">
+            <button id="jumpMissingButton" class="secondary-action" type="button">次の未入力へ</button>
+            <button id="deletePointButton" class="danger-button" type="button">点を削除</button>
+          </div>
+          <label class="check-row">
+            <input id="centerAfterPointInput" type="checkbox" checked>
+            <span>打点後に中央へ寄せる</span>
+          </label>
+          <p id="selectionInfo" class="helper-text">ID 1 の点を選択中</p>
+          <p id="coordinateInfo" class="helper-text">座標: -</p>
+        </section>
+
+        <section class="control-card">
+          <div class="card-header">
+            <h2>動画制御</h2>
+          </div>
+          <div class="frame-controls">
+            <button id="prevFrameButton" class="frame-button" type="button">◀</button>
+            <label class="field">
+              <span>フレーム番号</span>
+              <input id="frameNumberInput" type="number" min="1" step="1" value="1">
+            </label>
+            <button id="nextFrameButton" class="frame-button" type="button">▶</button>
+          </div>
+          <label class="field">
+            <span>フレームスライダー</span>
+            <input id="frameSlider" type="range" min="1" max="1" step="1" value="1">
+          </label>
+          <label class="field">
+            <span>フレーム移動幅</span>
+            <input id="stepFramesInput" type="number" min="1" step="1" value="1">
+          </label>
+        </section>
+
+        <section class="control-card">
+          <div class="card-header">
+            <h2>描画</h2>
+          </div>
+          <label class="field">
+            <span>ガンマ補正 <strong id="gammaValue">1.00</strong></span>
+            <input id="gammaInput" type="range" min="0.1" max="2" step="0.05" value="1">
+          </label>
+
+          <fieldset class="radio-group">
+            <legend>クリック後の自動送り</legend>
+            <label class="radio-row">
+              <input type="radio" name="autoAdvance" value="frame">
+              <span>フレーム送り</span>
+            </label>
+            <label class="radio-row">
+              <input type="radio" name="autoAdvance" value="id">
+              <span>ID送り</span>
+            </label>
+            <label class="radio-row">
+              <input type="radio" name="autoAdvance" value="none" checked>
+              <span>自動送りなし</span>
+            </label>
+          </fieldset>
+
+          <p class="helper-text">打点モード: タップで追加、既存点をドラッグで調整、長押しで削除</p>
+          <p class="helper-text">画面操作モード: ドラッグでパン、ピンチでズーム、2本指タップでUndo</p>
+        </section>
+      </aside>
+    </main>
+
+    <div id="videoPool" hidden></div>
+  </div>
+</body>
+</html>
