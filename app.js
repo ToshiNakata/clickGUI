@@ -26,6 +26,8 @@
     future: [],
     interaction: null,
     navGesture: null,
+    touchGesture: null,
+    touchTwoFingerTap: null,
     activePointers: new Map(),
     twoFingerTap: null,
     renderToken: 0,
@@ -135,6 +137,10 @@
     els.mainCanvas.addEventListener("pointerup", handlePointerUp);
     els.mainCanvas.addEventListener("pointercancel", handlePointerCancel);
     els.mainCanvas.addEventListener("wheel", handleWheel, { passive: false });
+    els.mainCanvas.addEventListener("touchstart", handleTouchStart, { passive: false });
+    els.mainCanvas.addEventListener("touchmove", handleTouchMove, { passive: false });
+    els.mainCanvas.addEventListener("touchend", handleTouchEnd, { passive: false });
+    els.mainCanvas.addEventListener("touchcancel", handleTouchCancel, { passive: false });
     els.mainCanvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
     window.addEventListener("resize", () => {
@@ -988,7 +994,7 @@
     displayCtx.stroke();
     points.forEach((point) => {
       displayCtx.beginPath();
-      displayCtx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+      displayCtx.arc(point.x, point.y, 2, 0, Math.PI * 2);
       displayCtx.fill();
     });
     displayCtx.restore();
@@ -1005,7 +1011,7 @@
         continue;
       }
       const screen = worldToScreen(point, transform);
-      drawPointMarker(screen.x, screen.y, 6, "rgba(180, 188, 192, 0.92)", "rgba(22, 30, 35, 0.54)");
+      drawPointMarker(screen.x, screen.y, 2, "rgba(180, 188, 192, 0.92)", "rgba(22, 30, 35, 0.54)", 1);
       drawPointLabel(screen.x, screen.y, idIndex + 1, "rgba(214, 219, 222, 0.92)");
     }
     displayCtx.restore();
@@ -1017,24 +1023,24 @@
       return;
     }
     const screen = worldToScreen(point, transform);
-    drawPointMarker(screen.x, screen.y, 8, "rgba(116, 233, 170, 0.98)", "rgba(5, 73, 50, 0.86)");
+    drawPointMarker(screen.x, screen.y, 2.5, "rgba(116, 233, 170, 0.98)", "rgba(5, 73, 50, 0.86)", 1);
     drawPointLabel(screen.x, screen.y, state.currentId + 1, "rgba(185, 255, 219, 0.96)");
     displayCtx.save();
-    displayCtx.strokeStyle = "rgba(255, 255, 255, 0.92)";
-    displayCtx.lineWidth = 2;
+    displayCtx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    displayCtx.lineWidth = 1;
     displayCtx.beginPath();
-    displayCtx.arc(screen.x, screen.y, 13, 0, Math.PI * 2);
+    displayCtx.arc(screen.x, screen.y, 6, 0, Math.PI * 2);
     displayCtx.stroke();
     displayCtx.restore();
   }
 
-  function drawPointMarker(x, y, radius, fill, stroke) {
+  function drawPointMarker(x, y, radius, fill, stroke, lineWidth = 1) {
     displayCtx.save();
     displayCtx.beginPath();
     displayCtx.arc(x, y, radius, 0, Math.PI * 2);
     displayCtx.fillStyle = fill;
     displayCtx.fill();
-    displayCtx.lineWidth = 2;
+    displayCtx.lineWidth = lineWidth;
     displayCtx.strokeStyle = stroke;
     displayCtx.stroke();
     displayCtx.restore();
@@ -1061,6 +1067,9 @@
     if (!state.videos.length) {
       return;
     }
+    if (event.pointerType === "touch") {
+      return;
+    }
     if (typeof event.button === "number" && event.button !== 0) {
       return;
     }
@@ -1082,10 +1091,6 @@
     if (state.mode === "navigate") {
       els.mainCanvas.setPointerCapture(event.pointerId);
       startOrUpdateNavigationGesture();
-      return;
-    }
-
-    if (event.pointerType === "touch") {
       return;
     }
 
@@ -1121,7 +1126,7 @@
     }
 
     const before = clonePoint(getPoint(state.currentVideoIndex, state.currentId, state.currentFrame));
-    setPointValue(state.currentVideoIndex, state.currentId, state.currentFrame, worldPoint);
+    setPointValue(state.currentVideoIndex, state.currentId, state.currentFrame, worldPoint, { center: true });
     state.interaction = {
       type: "point",
       pointerId: event.pointerId,
@@ -1141,6 +1146,9 @@
 
   function handlePointerMove(event) {
     if (!state.videos.length) {
+      return;
+    }
+    if (event.pointerType === "touch") {
       return;
     }
 
@@ -1182,13 +1190,16 @@
     }
 
     const worldPoint = screenToWorld(point.x, point.y);
-    setPointValue(state.interaction.videoIndex, state.interaction.idIndex, state.interaction.frameIndex, worldPoint);
+    setPointValue(state.interaction.videoIndex, state.interaction.idIndex, state.interaction.frameIndex, worldPoint, { center: false });
     updateSelectionUi();
     renderFrameIfReady();
   }
 
   function handlePointerUp(event) {
     if (!state.videos.length) {
+      return;
+    }
+    if (event.pointerType === "touch") {
       return;
     }
 
@@ -1223,9 +1234,6 @@
       }
 
       if (!interaction.deletedByLongPress) {
-        if (interaction.createdNew && after) {
-          maybeCenterViewOnPoint(after);
-        }
         handleAutoAdvanceAfterPoint();
       } else {
         updateAllUi();
@@ -1242,6 +1250,9 @@
   }
 
   function handlePointerCancel(event) {
+    if (event.pointerType === "touch") {
+      return;
+    }
     const interaction = state.interaction;
     if (interaction && interaction.pointerId === event.pointerId && interaction.longPressTimer) {
       clearTimeout(interaction.longPressTimer);
@@ -1249,6 +1260,186 @@
     state.interaction = null;
     state.activePointers.delete(event.pointerId);
     startOrUpdateNavigationGesture();
+  }
+
+  function handleTouchStart(event) {
+    if (!state.videos.length) {
+      return;
+    }
+
+    const touches = getTouchPoints(event.touches);
+    if (touches.length === 2) {
+      state.touchTwoFingerTap = {
+        startedAt: performance.now(),
+        startPoints: touches.map((touch) => ({ id: touch.id, x: touch.x, y: touch.y })),
+        maxMove: 0,
+      };
+    } else if (touches.length > 2) {
+      state.touchTwoFingerTap = null;
+    }
+
+    if (state.mode !== "navigate") {
+      if (touches.length >= 2) {
+        event.preventDefault();
+      }
+      return;
+    }
+
+    event.preventDefault();
+    startTouchNavigationGesture(touches);
+  }
+
+  function handleTouchMove(event) {
+    if (!state.videos.length) {
+      return;
+    }
+
+    const touches = getTouchPoints(event.touches);
+    updateTouchTwoFingerTap(touches);
+
+    if (state.mode !== "navigate") {
+      return;
+    }
+
+    event.preventDefault();
+    if (!touches.length) {
+      state.touchGesture = null;
+      return;
+    }
+
+    if (!state.touchGesture) {
+      startTouchNavigationGesture(touches);
+    }
+    updateTouchNavigationGesture(touches);
+  }
+
+  function handleTouchEnd(event) {
+    if (!state.videos.length) {
+      return;
+    }
+
+    const remainingTouches = getTouchPoints(event.touches);
+    updateTouchTwoFingerTap(remainingTouches);
+    finalizeTouchTwoFingerTapIfNeeded(remainingTouches);
+
+    if (state.mode !== "navigate") {
+      return;
+    }
+
+    event.preventDefault();
+    if (!remainingTouches.length) {
+      state.touchGesture = null;
+      return;
+    }
+    startTouchNavigationGesture(remainingTouches);
+  }
+
+  function handleTouchCancel(event) {
+    if (!state.videos.length) {
+      return;
+    }
+    if (state.mode === "navigate") {
+      event.preventDefault();
+    }
+    state.touchGesture = null;
+    state.touchTwoFingerTap = null;
+  }
+
+  function startTouchNavigationGesture(touches) {
+    const view = getActiveView();
+    if (!view) {
+      return;
+    }
+
+    if (touches.length >= 2) {
+      const [first, second] = touches;
+      const midpoint = {
+        x: (first.x + second.x) / 2,
+        y: (first.y + second.y) / 2,
+      };
+      state.touchGesture = {
+        type: "pinch",
+        anchorWorld: screenToWorld(midpoint.x, midpoint.y),
+        startDistance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+        startScale: view.scale,
+      };
+      return;
+    }
+
+    if (touches.length === 1) {
+      const [touch] = touches;
+      state.touchGesture = {
+        type: "pan",
+        touchId: touch.id,
+        startTouchX: touch.x,
+        startTouchY: touch.y,
+        startPanX: view.panX,
+        startPanY: view.panY,
+      };
+      return;
+    }
+
+    state.touchGesture = null;
+  }
+
+  function updateTouchNavigationGesture(touches) {
+    const view = getActiveView();
+    if (!view || !state.touchGesture) {
+      return;
+    }
+
+    if (state.touchGesture.type === "pan" && touches.length === 1) {
+      const [touch] = touches;
+      view.panX = state.touchGesture.startPanX + (touch.x - state.touchGesture.startTouchX);
+      view.panY = state.touchGesture.startPanY + (touch.y - state.touchGesture.startTouchY);
+      renderFrameIfReady();
+      return;
+    }
+
+    if (touches.length >= 2) {
+      const [first, second] = touches;
+      const midpoint = {
+        x: (first.x + second.x) / 2,
+        y: (first.y + second.y) / 2,
+      };
+      const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+      const targetScale = clamp(
+        state.touchGesture.startScale * (distance / Math.max(1, state.touchGesture.startDistance)),
+        MIN_VIEW_SCALE,
+        MAX_VIEW_SCALE
+      );
+      applyZoomAroundWorldPoint(view, state.touchGesture.anchorWorld, midpoint, targetScale);
+      renderFrameIfReady();
+    }
+  }
+
+  function updateTouchTwoFingerTap(touches) {
+    if (!state.touchTwoFingerTap) {
+      return;
+    }
+
+    touches.forEach((touch) => {
+      const startPoint = state.touchTwoFingerTap.startPoints.find((point) => point.id === touch.id);
+      if (!startPoint) {
+        return;
+      }
+      const move = Math.hypot(touch.x - startPoint.x, touch.y - startPoint.y);
+      state.touchTwoFingerTap.maxMove = Math.max(state.touchTwoFingerTap.maxMove, move);
+    });
+  }
+
+  function finalizeTouchTwoFingerTapIfNeeded(remainingTouches) {
+    if (!state.touchTwoFingerTap || remainingTouches.length > 0) {
+      return;
+    }
+
+    const elapsed = performance.now() - state.touchTwoFingerTap.startedAt;
+    const shouldUndo = elapsed <= TWO_FINGER_TAP_MS && state.touchTwoFingerTap.maxMove <= TWO_FINGER_MOVE_PX;
+    state.touchTwoFingerTap = null;
+
+    if (shouldUndo) {
+      undo();
+    }
   }
 
   function registerTwoFingerTapCandidate() {
@@ -1506,6 +1697,25 @@
     };
   }
 
+  function canvasPointFromClient(clientX, clientY) {
+    const rect = els.mainCanvas.getBoundingClientRect();
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+    };
+  }
+
+  function getTouchPoints(touchList) {
+    return Array.from(touchList).map((touch) => {
+      const point = canvasPointFromClient(touch.clientX, touch.clientY);
+      return {
+        id: touch.identifier,
+        x: point.x,
+        y: point.y,
+      };
+    });
+  }
+
   function getCurrentFrameCount() {
     const video = getActiveVideo();
     return video ? video.frameCount : 0;
@@ -1526,12 +1736,15 @@
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
   }
 
-  function setPointValue(videoIndex, idIndex, frameIndex, point) {
+  function setPointValue(videoIndex, idIndex, frameIndex, point, options = {}) {
     if (!state.annotations.x[videoIndex] || !state.annotations.x[videoIndex][idIndex]) {
       return;
     }
     state.annotations.x[videoIndex][idIndex][frameIndex] = point ? point.x : null;
     state.annotations.y[videoIndex][idIndex][frameIndex] = point ? point.y : null;
+    if (point && options.center) {
+      maybeCenterViewOnPoint(point);
+    }
   }
 
   function frameIndexToTime(video, frameIndex) {
