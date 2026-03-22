@@ -32,7 +32,10 @@
     touchTwoFingerTap: null,
     activePointers: new Map(),
     twoFingerTap: null,
-    renderToken: 0,
+    pendingFrameRender: null,
+    frameRenderLoopPromise: null,
+    stageRenderRequestId: 0,
+    frameBufferOwnerIndex: null,
     defaultFps: 30,
   };
 
@@ -348,8 +351,9 @@
       fps,
       frameCount,
       view: { scale: 1, panX: 0, panY: 0 },
-      renderedFrame: null,
-      renderedGamma: null,
+      decodedFrame: null,
+      bufferedFrame: null,
+      bufferedGamma: null,
     };
   }
 
@@ -430,6 +434,8 @@
     state.currentVideoIndex = 0;
     state.currentFrame = 0;
     state.currentId = 0;
+    state.pendingFrameRender = null;
+    state.frameBufferOwnerIndex = null;
   }
 
   function releaseVideoEntries(videos) {
@@ -779,9 +785,11 @@
         const savedFps = readPositiveNumber(savedVideo.fps, video.fps);
         video.fps = savedFps;
         video.frameCount = Math.max(1, readPositiveInteger(savedVideo.frameCount, computeFrameCount(video.duration, savedFps)));
-        video.renderedFrame = null;
-        video.renderedGamma = null;
+        video.decodedFrame = null;
+        video.bufferedFrame = null;
+        video.bufferedGamma = null;
       });
+      state.frameBufferOwnerIndex = null;
     }
 
     const nextIdCount = Math.max(1, readPositiveInteger(payload.n_point || payload.idCount, state.idCount));
@@ -1033,44 +1041,127 @@
     displayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  async function renderCurrentFrame(options = {}) {
+  function renderCurrentFrame(options = {}) {
     const video = getActiveVideo();
     if (!video) {
-      drawEmptyState();
-      return;
+      state.pendingFrameRender = null;
+      scheduleStageRender();
+      return Promise.resolve();
     }
 
-    const needSeek = options.forceSeek || video.renderedFrame !== state.currentFrame;
-    const needBufferRefresh = options.forceBufferRefresh || video.renderedGamma !== state.gamma || frameCanvas.width !== video.width || frameCanvas.height !== video.height;
-    const token = ++state.renderToken;
-
-    if (needSeek) {
-      const targetTime = frameIndexToTime(video, state.currentFrame);
-      await seekVideo(video, targetTime);
-      if (token !== state.renderToken) {
-        return;
-      }
-      video.renderedFrame = state.currentFrame;
-      video.renderedGamma = null;
-    }
-
-    if (needSeek || needBufferRefresh || video.renderedGamma !== state.gamma) {
-      paintVideoToBuffer(video);
-      if (Math.abs(state.gamma - 1) > 0.001) {
-        applyGammaToBuffer(state.gamma);
-      }
-      video.renderedGamma = state.gamma;
-    }
-
-    renderStage();
+    state.pendingFrameRender = {
+      videoIndex: state.currentVideoIndex,
+      frameIndex: state.currentFrame,
+      gamma: state.gamma,
+      forceSeek: Boolean(options.forceSeek),
+      forceBufferRefresh: Boolean(options.forceBufferRefresh),
+    };
+    return ensureFrameRenderLoop();
   }
 
   function renderFrameIfReady() {
-    if (!state.videos.length) {
-      drawEmptyState();
+    scheduleStageRender();
+  }
+
+  function scheduleStageRender() {
+    if (state.stageRenderRequestId) {
       return;
     }
-    renderStage();
+    state.stageRenderRequestId = window.requestAnimationFrame(() => {
+      state.stageRenderRequestId = 0;
+      renderStage();
+    });
+  }
+
+  function ensureFrameRenderLoop() {
+    if (!state.frameRenderLoopPromise) {
+      state.frameRenderLoopPromise = processFrameRenderQueue().finally(() => {
+        state.frameRenderLoopPromise = null;
+      });
+    }
+    return state.frameRenderLoopPromise;
+  }
+
+  async function processFrameRenderQueue() {
+    while (state.pendingFrameRender) {
+      const request = state.pendingFrameRender;
+      state.pendingFrameRender = null;
+      await performFrameRenderRequest(request);
+    }
+  }
+
+  async function performFrameRenderRequest(request) {
+    const video = state.videos[request.videoIndex];
+    if (!video) {
+      scheduleStageRender();
+      return;
+    }
+
+    const needSeek = request.forceSeek || video.decodedFrame !== request.frameIndex;
+    const needBufferRefresh = request.forceBufferRefresh
+      || state.frameBufferOwnerIndex !== request.videoIndex
+      || video.bufferedFrame !== request.frameIndex
+      || video.bufferedGamma !== request.gamma
+      || frameCanvas.width !== video.width
+      || frameCanvas.height !== video.height;
+
+    if (needSeek) {
+      const targetTime = frameIndexToTime(video, request.frameIndex);
+      await seekVideo(video, targetTime);
+      video.decodedFrame = request.frameIndex;
+    }
+
+    if (hasSupersedingFrameRequest(request)) {
+      return;
+    }
+
+    if (needSeek || needBufferRefresh) {
+      const painted = await paintBufferedFrameOnAnimationFrame(video, request);
+      if (!painted || hasSupersedingFrameRequest(request)) {
+        return;
+      }
+    }
+
+    if (isActiveFrameRequest(request)) {
+      scheduleStageRender();
+    }
+  }
+
+  function hasSupersedingFrameRequest(request) {
+    if (!state.pendingFrameRender) {
+      return false;
+    }
+    const pending = state.pendingFrameRender;
+    return pending.videoIndex !== request.videoIndex
+      || pending.frameIndex !== request.frameIndex
+      || Math.abs(pending.gamma - request.gamma) > 0.0001
+      || pending.forceSeek
+      || pending.forceBufferRefresh;
+  }
+
+  function isActiveFrameRequest(request) {
+    return request.videoIndex === state.currentVideoIndex
+      && request.frameIndex === state.currentFrame
+      && Math.abs(request.gamma - state.gamma) < 0.0001;
+  }
+
+  function paintBufferedFrameOnAnimationFrame(video, request) {
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => {
+        if (hasSupersedingFrameRequest(request)) {
+          resolve(false);
+          return;
+        }
+        paintVideoToBuffer(video);
+        if (Math.abs(request.gamma - 1) > 0.001) {
+          applyGammaToBuffer(request.gamma);
+        }
+        state.frameBufferOwnerIndex = request.videoIndex;
+        video.bufferedFrame = request.frameIndex;
+        video.bufferedGamma = request.gamma;
+        resolve(true);
+      });
+    });
   }
 
   function handleRenderError(error) {
@@ -1110,9 +1201,23 @@
     const video = getActiveVideo();
     const rect = els.canvasWrap.getBoundingClientRect();
     displayCtx.clearRect(0, 0, rect.width, rect.height);
+    const hasBufferedFrame = Boolean(
+      video
+      && frameCanvas.width
+      && frameCanvas.height
+      && state.frameBufferOwnerIndex === state.currentVideoIndex
+      && video.bufferedFrame === state.currentFrame
+      && video.bufferedGamma !== null
+      && Math.abs(video.bufferedGamma - state.gamma) < 0.0001
+    );
 
-    if (!video || !frameCanvas.width || !frameCanvas.height) {
-      drawEmptyState();
+    if (!video) {
+      drawEmptyState(true);
+      return;
+    }
+
+    if (!hasBufferedFrame) {
+      drawEmptyState(false);
       return;
     }
 
@@ -1226,10 +1331,10 @@
     displayCtx.restore();
   }
 
-  function drawEmptyState() {
+  function drawEmptyState(showPrompt = !state.videos.length) {
     const rect = els.canvasWrap.getBoundingClientRect();
     displayCtx.clearRect(0, 0, rect.width, rect.height);
-    els.canvasEmpty.hidden = false;
+    els.canvasEmpty.hidden = !showPrompt;
     drawBackdrop(rect.width, rect.height);
   }
 
