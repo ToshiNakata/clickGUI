@@ -2,6 +2,7 @@
   const LONG_PRESS_MS = 650;
   const TWO_FINGER_TAP_MS = 320;
   const TWO_FINGER_MOVE_PX = 14;
+  const FRAME_PREVIEW_INTERVAL_MS = 60;
   const MIN_VIEW_SCALE = 0.3;
   const MAX_VIEW_SCALE = 12;
   const HISTORY_LIMIT = 500;
@@ -34,8 +35,11 @@
     twoFingerTap: null,
     pendingFrameRender: null,
     frameRenderLoopPromise: null,
+    frameRenderLoopActive: false,
     stageRenderRequestId: 0,
     frameBufferOwnerIndex: null,
+    framePreviewTimerId: 0,
+    pendingPreviewFrame: null,
     defaultFps: 30,
   };
 
@@ -138,7 +142,10 @@
       setCurrentFrame(readPositiveInteger(els.frameNumberInput.value, 1) - 1);
     });
     els.frameSlider.addEventListener("input", () => {
-      setCurrentFrame(readPositiveInteger(els.frameSlider.value, 1) - 1);
+      setCurrentFrame(readPositiveInteger(els.frameSlider.value, 1) - 1, { preview: true, precise: false });
+    });
+    els.frameSlider.addEventListener("change", () => {
+      setCurrentFrame(readPositiveInteger(els.frameSlider.value, 1) - 1, { precise: true });
     });
 
     document.querySelectorAll('input[name="autoAdvance"]').forEach((radio) => {
@@ -435,7 +442,9 @@
     state.currentFrame = 0;
     state.currentId = 0;
     state.pendingFrameRender = null;
+    state.frameRenderLoopActive = false;
     state.frameBufferOwnerIndex = null;
+    cancelQueuedFramePreview();
   }
 
   function releaseVideoEntries(videos) {
@@ -581,7 +590,7 @@
     setCurrentFrame(state.currentFrame + direction * state.frameStep);
   }
 
-  function setCurrentFrame(frameIndex) {
+  function setCurrentFrame(frameIndex, options = {}) {
     const frameCount = getCurrentFrameCount();
     if (!frameCount) {
       state.currentFrame = 0;
@@ -589,16 +598,28 @@
       return;
     }
 
+    const preview = Boolean(options.preview);
+    const precise = options.precise !== false;
     const nextFrame = clamp(frameIndex, 0, frameCount - 1);
     if (nextFrame === state.currentFrame) {
       updateAllUi();
-      renderFrameIfReady();
+      if (preview) {
+        queuePreviewFrameRender();
+      } else {
+        cancelQueuedFramePreview();
+        renderCurrentFrame({ forceSeek: true, forceBufferRefresh: false, precise }).catch(handleRenderError);
+      }
       return;
     }
 
     state.currentFrame = nextFrame;
     updateAllUi();
-    renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true }).catch(handleRenderError);
+    if (preview) {
+      queuePreviewFrameRender();
+      return;
+    }
+    cancelQueuedFramePreview();
+    renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true, precise }).catch(handleRenderError);
   }
 
   function setCurrentId(idIndex) {
@@ -623,6 +644,7 @@
 
     state.currentVideoIndex = nextIndex;
     state.currentFrame = clamp(state.currentFrame, 0, Math.max(0, getCurrentFrameCount() - 1));
+    cancelQueuedFramePreview();
     updateAllUi();
     renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true }).catch(handleRenderError);
   }
@@ -1055,6 +1077,7 @@
       gamma: state.gamma,
       forceSeek: Boolean(options.forceSeek),
       forceBufferRefresh: Boolean(options.forceBufferRefresh),
+      precise: options.precise !== false,
     };
     return ensureFrameRenderLoop();
   }
@@ -1074,12 +1097,24 @@
   }
 
   function ensureFrameRenderLoop() {
-    if (!state.frameRenderLoopPromise) {
-      state.frameRenderLoopPromise = processFrameRenderQueue().finally(() => {
-        state.frameRenderLoopPromise = null;
-      });
+    if (state.frameRenderLoopActive) {
+      return state.frameRenderLoopPromise || Promise.resolve();
     }
-    return state.frameRenderLoopPromise;
+
+    state.frameRenderLoopActive = true;
+    const loopPromise = processFrameRenderQueue();
+    state.frameRenderLoopPromise = loopPromise;
+    const finalize = () => {
+      if (state.frameRenderLoopPromise === loopPromise) {
+        state.frameRenderLoopPromise = null;
+      }
+      state.frameRenderLoopActive = false;
+      if (state.pendingFrameRender) {
+        ensureFrameRenderLoop().catch(handleRenderError);
+      }
+    };
+    loopPromise.then(finalize, finalize);
+    return loopPromise;
   }
 
   async function processFrameRenderQueue() {
@@ -1107,7 +1142,7 @@
 
     if (needSeek) {
       const targetTime = frameIndexToTime(video, request.frameIndex);
-      await seekVideo(video, targetTime);
+      await seekVideo(video, targetTime, { precise: request.precise });
       video.decodedFrame = request.frameIndex;
     }
 
@@ -1136,7 +1171,8 @@
       || pending.frameIndex !== request.frameIndex
       || Math.abs(pending.gamma - request.gamma) > 0.0001
       || pending.forceSeek
-      || pending.forceBufferRefresh;
+      || pending.forceBufferRefresh
+      || pending.precise !== request.precise;
   }
 
   function isActiveFrameRequest(request) {
@@ -1162,6 +1198,29 @@
         resolve(true);
       });
     });
+  }
+
+  function queuePreviewFrameRender() {
+    state.pendingPreviewFrame = state.currentFrame;
+    if (state.framePreviewTimerId) {
+      return;
+    }
+    state.framePreviewTimerId = window.setTimeout(() => {
+      state.framePreviewTimerId = 0;
+      if (state.pendingPreviewFrame === null) {
+        return;
+      }
+      state.pendingPreviewFrame = null;
+      renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true, precise: false }).catch(handleRenderError);
+    }, FRAME_PREVIEW_INTERVAL_MS);
+  }
+
+  function cancelQueuedFramePreview() {
+    if (state.framePreviewTimerId) {
+      window.clearTimeout(state.framePreviewTimerId);
+    }
+    state.framePreviewTimerId = 0;
+    state.pendingPreviewFrame = null;
   }
 
   function handleRenderError(error) {
@@ -2038,8 +2097,8 @@
     return Math.min(Math.max(0, unclamped), Math.max(0, video.duration - Math.min(0.001, frameDuration * 0.25)));
   }
 
-  function seekVideo(video, time) {
-    return attemptVideoSeek(video, time, 2);
+  function seekVideo(video, time, options = {}) {
+    return attemptVideoSeek(video, time, options.precise === false ? 0 : 2);
   }
 
   function attemptVideoSeek(video, time, retriesLeft) {
