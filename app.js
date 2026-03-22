@@ -2,7 +2,6 @@
   const LONG_PRESS_MS = 650;
   const TWO_FINGER_TAP_MS = 320;
   const TWO_FINGER_MOVE_PX = 14;
-  const FRAME_PREVIEW_INTERVAL_MS = 60;
   const MIN_VIEW_SCALE = 0.3;
   const MAX_VIEW_SCALE = 12;
   const HISTORY_LIMIT = 500;
@@ -36,10 +35,11 @@
     pendingFrameRender: null,
     frameRenderLoopPromise: null,
     frameRenderLoopActive: false,
+    seekWaitActive: false,
     stageRenderRequestId: 0,
     frameBufferOwnerIndex: null,
-    framePreviewTimerId: 0,
-    pendingPreviewFrame: null,
+    sliderPreviewFrame: null,
+    deferredFrameCommit: null,
     defaultFps: 30,
   };
 
@@ -142,11 +142,12 @@
       setCurrentFrame(readPositiveInteger(els.frameNumberInput.value, 1) - 1);
     });
     els.frameSlider.addEventListener("input", () => {
-      setCurrentFrame(readPositiveInteger(els.frameSlider.value, 1) - 1, { preview: true, precise: false });
+      previewSliderFrame(readPositiveInteger(els.frameSlider.value, 1) - 1);
     });
     els.frameSlider.addEventListener("change", () => {
-      setCurrentFrame(readPositiveInteger(els.frameSlider.value, 1) - 1, { precise: true });
+      commitPendingSliderFrame();
     });
+    els.frameSlider.addEventListener("pointerup", commitPendingSliderFrame);
 
     document.querySelectorAll('input[name="autoAdvance"]').forEach((radio) => {
       radio.addEventListener("change", (event) => {
@@ -443,8 +444,10 @@
     state.currentId = 0;
     state.pendingFrameRender = null;
     state.frameRenderLoopActive = false;
+    state.seekWaitActive = false;
     state.frameBufferOwnerIndex = null;
-    cancelQueuedFramePreview();
+    state.sliderPreviewFrame = null;
+    state.deferredFrameCommit = null;
   }
 
   function releaseVideoEntries(videos) {
@@ -587,6 +590,9 @@
   }
 
   function stepFrame(direction) {
+    if (isFrameNavigationLocked()) {
+      return;
+    }
     setCurrentFrame(state.currentFrame + direction * state.frameStep);
   }
 
@@ -594,32 +600,51 @@
     const frameCount = getCurrentFrameCount();
     if (!frameCount) {
       state.currentFrame = 0;
+      state.sliderPreviewFrame = null;
+      state.deferredFrameCommit = null;
       updateAllUi();
       return;
     }
 
-    const preview = Boolean(options.preview);
     const precise = options.precise !== false;
+    const forceSeek = options.forceSeek !== false;
     const nextFrame = clamp(frameIndex, 0, frameCount - 1);
+    const forceBufferRefresh = options.forceBufferRefresh !== undefined
+      ? Boolean(options.forceBufferRefresh)
+      : nextFrame !== state.currentFrame;
+    const preservePreviewDisplay = Boolean(options.preservePreviewDisplay);
+
+    if (isFrameNavigationLocked()) {
+      state.deferredFrameCommit = {
+        frameIndex: nextFrame,
+        precise,
+        forceSeek,
+        forceBufferRefresh,
+      };
+      if (preservePreviewDisplay) {
+        state.sliderPreviewFrame = nextFrame;
+        updateFrameUi();
+      }
+      return;
+    }
+
     if (nextFrame === state.currentFrame) {
+      state.sliderPreviewFrame = null;
+      state.deferredFrameCommit = null;
       updateAllUi();
-      if (preview) {
-        queuePreviewFrameRender();
+      if (forceSeek || forceBufferRefresh) {
+        renderCurrentFrame({ forceSeek, forceBufferRefresh, precise }).catch(handleRenderError);
       } else {
-        cancelQueuedFramePreview();
-        renderCurrentFrame({ forceSeek: true, forceBufferRefresh: false, precise }).catch(handleRenderError);
+        renderFrameIfReady();
       }
       return;
     }
 
     state.currentFrame = nextFrame;
+    state.sliderPreviewFrame = null;
+    state.deferredFrameCommit = null;
     updateAllUi();
-    if (preview) {
-      queuePreviewFrameRender();
-      return;
-    }
-    cancelQueuedFramePreview();
-    renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true, precise }).catch(handleRenderError);
+    renderCurrentFrame({ forceSeek, forceBufferRefresh, precise }).catch(handleRenderError);
   }
 
   function setCurrentId(idIndex) {
@@ -644,7 +669,8 @@
 
     state.currentVideoIndex = nextIndex;
     state.currentFrame = clamp(state.currentFrame, 0, Math.max(0, getCurrentFrameCount() - 1));
-    cancelQueuedFramePreview();
+    state.sliderPreviewFrame = null;
+    state.deferredFrameCommit = null;
     updateAllUi();
     renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true }).catch(handleRenderError);
   }
@@ -972,7 +998,10 @@
 
   function updateFrameUi() {
     const frameCount = getCurrentFrameCount();
-    const frameNumber = frameCount ? state.currentFrame + 1 : 1;
+    const displayFrame = frameCount
+      ? clamp(state.sliderPreviewFrame !== null ? state.sliderPreviewFrame : state.currentFrame, 0, Math.max(0, frameCount - 1))
+      : 0;
+    const frameNumber = frameCount ? displayFrame + 1 : 1;
     els.frameNumberInput.value = String(frameNumber);
     els.frameNumberInput.max = String(Math.max(1, frameCount));
     els.frameSlider.max = String(Math.max(1, frameCount));
@@ -1019,6 +1048,7 @@
 
   function updateControlAvailability() {
     const hasVideo = state.videos.length > 0;
+    const navigationLocked = hasVideo && isFrameNavigationLocked();
     const controls = [
       els.saveButton,
       els.annotateModeButton,
@@ -1036,8 +1066,6 @@
       els.trailFramesInput,
       els.fpsInput,
       els.centerAfterPointInput,
-      els.prevFrameButton,
-      els.nextFrameButton,
       els.frameNumberInput,
       els.frameSlider,
       els.decreaseStepFramesButton,
@@ -1049,6 +1077,8 @@
     controls.forEach((control) => {
       control.disabled = !hasVideo;
     });
+    els.prevFrameButton.disabled = !hasVideo || navigationLocked;
+    els.nextFrameButton.disabled = !hasVideo || navigationLocked;
     els.undoButton.disabled = !hasVideo || !state.history.length;
     els.redoButton.disabled = !hasVideo || !state.future.length;
     els.deletePointButton.disabled = !hasVideo || !getPoint(state.currentVideoIndex, state.currentId, state.currentFrame);
@@ -1102,6 +1132,7 @@
     }
 
     state.frameRenderLoopActive = true;
+    updateControlAvailability();
     const loopPromise = processFrameRenderQueue();
     state.frameRenderLoopPromise = loopPromise;
     const finalize = () => {
@@ -1109,8 +1140,14 @@
         state.frameRenderLoopPromise = null;
       }
       state.frameRenderLoopActive = false;
+      state.seekWaitActive = false;
+      updateControlAvailability();
       if (state.pendingFrameRender) {
         ensureFrameRenderLoop().catch(handleRenderError);
+        return;
+      }
+      if (flushDeferredFrameCommit()) {
+        return;
       }
     };
     loopPromise.then(finalize, finalize);
@@ -1142,8 +1179,13 @@
 
     if (needSeek) {
       const targetTime = frameIndexToTime(video, request.frameIndex);
-      await seekVideo(video, targetTime, { precise: request.precise });
-      video.decodedFrame = request.frameIndex;
+      state.seekWaitActive = true;
+      try {
+        await seekVideo(video, targetTime, { precise: request.precise });
+        video.decodedFrame = request.frameIndex;
+      } finally {
+        state.seekWaitActive = false;
+      }
     }
 
     if (hasSupersedingFrameRequest(request)) {
@@ -1200,27 +1242,47 @@
     });
   }
 
-  function queuePreviewFrameRender() {
-    state.pendingPreviewFrame = state.currentFrame;
-    if (state.framePreviewTimerId) {
+  function previewSliderFrame(frameIndex) {
+    const frameCount = getCurrentFrameCount();
+    if (!frameCount) {
       return;
     }
-    state.framePreviewTimerId = window.setTimeout(() => {
-      state.framePreviewTimerId = 0;
-      if (state.pendingPreviewFrame === null) {
-        return;
-      }
-      state.pendingPreviewFrame = null;
-      renderCurrentFrame({ forceSeek: true, forceBufferRefresh: true, precise: false }).catch(handleRenderError);
-    }, FRAME_PREVIEW_INTERVAL_MS);
+    state.sliderPreviewFrame = clamp(frameIndex, 0, frameCount - 1);
+    updateFrameUi();
   }
 
-  function cancelQueuedFramePreview() {
-    if (state.framePreviewTimerId) {
-      window.clearTimeout(state.framePreviewTimerId);
+  function commitPendingSliderFrame() {
+    if (state.sliderPreviewFrame === null) {
+      return;
     }
-    state.framePreviewTimerId = 0;
-    state.pendingPreviewFrame = null;
+    setCurrentFrame(state.sliderPreviewFrame, { precise: true, preservePreviewDisplay: true });
+  }
+
+  function flushDeferredFrameCommit() {
+    if (!state.deferredFrameCommit || isFrameNavigationLocked()) {
+      return false;
+    }
+
+    const request = state.deferredFrameCommit;
+    state.deferredFrameCommit = null;
+    state.currentFrame = clamp(request.frameIndex, 0, Math.max(0, getCurrentFrameCount() - 1));
+    state.sliderPreviewFrame = null;
+    updateAllUi();
+    renderCurrentFrame({
+      forceSeek: request.forceSeek,
+      forceBufferRefresh: request.forceBufferRefresh,
+      precise: request.precise,
+    }).catch(handleRenderError);
+    return true;
+  }
+
+  function isFrameNavigationLocked() {
+    const video = getActiveVideo();
+    return Boolean(
+      state.frameRenderLoopActive
+      || state.seekWaitActive
+      || (video && video.element && video.element.seeking)
+    );
   }
 
   function handleRenderError(error) {
