@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>clickiPad</title>
-  <link rel="stylesheet" href="./styles.css">
-  <script defer src="./app.js"></script>
+  <link rel="stylesheet" href="./styles.css?v=20260322-2">
+  <script defer src="./app.js?v=20260322-2"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -65,22 +65,22 @@
             </div>
           </div>
           <div class="field-grid">
-            <label class="field">
+            <div class="field">
               <span>現在ID</span>
               <div class="stepper-row">
                 <button id="decreaseCurrentIdButton" class="mini-stepper" type="button">-</button>
-                <input id="currentIdInput" type="number" min="1" step="1" value="1">
+                <input id="currentIdInput" type="number" min="1" step="1" value="1" aria-label="現在ID">
                 <button id="increaseCurrentIdButton" class="mini-stepper" type="button">+</button>
               </div>
-            </label>
-            <label class="field">
+            </div>
+            <div class="field">
               <span>ID数</span>
               <div class="stepper-row">
                 <button id="decreaseIdCountButton" class="mini-stepper" type="button">-</button>
-                <input id="idCountInput" type="number" min="1" step="1" value="10">
+                <input id="idCountInput" type="number" min="1" step="1" value="10" aria-label="ID数">
                 <button id="increaseIdCountButton" class="mini-stepper" type="button">+</button>
               </div>
-            </label>
+            </div>
           </div>
           <div class="field-grid">
             <label class="field">
@@ -120,14 +120,14 @@
             <span>フレームスライダー</span>
             <input id="frameSlider" type="range" min="1" max="1" step="1" value="1">
           </label>
-          <label class="field">
+          <div class="field">
             <span>フレーム移動幅</span>
             <div class="stepper-row">
               <button id="decreaseStepFramesButton" class="mini-stepper" type="button">-</button>
-              <input id="stepFramesInput" type="number" min="1" step="1" value="1">
+              <input id="stepFramesInput" type="number" min="1" step="1" value="1" aria-label="フレーム移動幅">
               <button id="increaseStepFramesButton" class="mini-stepper" type="button">+</button>
             </div>
-          </label>
+          </div>
         </section>
 
         <section class="control-card">
