@@ -75,6 +75,10 @@
     coordinateInfo: document.getElementById("coordinateInfo"),
     prevFrameButton: document.getElementById("prevFrameButton"),
     nextFrameButton: document.getElementById("nextFrameButton"),
+    quickPrevFrame: document.getElementById("quickPrevFrame"),
+    quickNextFrame: document.getElementById("quickNextFrame"),
+    quickPrevId: document.getElementById("quickPrevId"),
+    quickNextId: document.getElementById("quickNextId"),
     frameNumberInput: document.getElementById("frameNumberInput"),
     frameSlider: document.getElementById("frameSlider"),
     stepFramesInput: document.getElementById("stepFramesInput"),
@@ -111,11 +115,15 @@
     els.jumpMissingButton.addEventListener("click", jumpToNextMissingFrame);
     els.prevFrameButton.addEventListener("click", () => stepFrame(-1));
     els.nextFrameButton.addEventListener("click", () => stepFrame(1));
+    els.quickPrevFrame.addEventListener("click", () => stepFrame(-1));
+    els.quickNextFrame.addEventListener("click", () => stepFrame(1));
     els.resetViewButton.addEventListener("click", resetActiveView);
     els.annotateModeButton.addEventListener("click", () => setMode("annotate"));
     els.navigateModeButton.addEventListener("click", () => setMode("navigate"));
     els.decreaseCurrentIdButton.addEventListener("click", () => setCurrentId(state.currentId - 1));
     els.increaseCurrentIdButton.addEventListener("click", () => setCurrentId(state.currentId + 1));
+    els.quickPrevId.addEventListener("click", () => setCurrentId(state.currentId - 1));
+    els.quickNextId.addEventListener("click", () => setCurrentId(state.currentId + 1));
     els.currentIdInput.addEventListener("change", () => setCurrentId(readPositiveInteger(els.currentIdInput.value, 1) - 1));
     els.decreaseIdCountButton.addEventListener("click", () => setIdCount(state.idCount - 1));
     els.increaseIdCountButton.addEventListener("click", () => setIdCount(state.idCount + 1));
@@ -1060,6 +1068,8 @@
       els.decreaseCurrentIdButton,
       els.currentIdInput,
       els.increaseCurrentIdButton,
+      els.quickPrevId,
+      els.quickNextId,
       els.decreaseIdCountButton,
       els.idCountInput,
       els.increaseIdCountButton,
@@ -1079,6 +1089,8 @@
     });
     els.prevFrameButton.disabled = !hasVideo || navigationLocked;
     els.nextFrameButton.disabled = !hasVideo || navigationLocked;
+    els.quickPrevFrame.disabled = !hasVideo || navigationLocked;
+    els.quickNextFrame.disabled = !hasVideo || navigationLocked;
     els.undoButton.disabled = !hasVideo || !state.history.length;
     els.redoButton.disabled = !hasVideo || !state.future.length;
     els.deletePointButton.disabled = !hasVideo || !getPoint(state.currentVideoIndex, state.currentId, state.currentFrame);

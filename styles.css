@@ -294,6 +294,55 @@ input[type="range"] {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.quick-nav-panel {
+  position: absolute;
+  left: clamp(12px, 2vw, 22px);
+  top: 50%;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.quick-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.quick-nav-group-spaced {
+  margin-top: 10px;
+}
+
+.quick-nav-button {
+  width: 60px;
+  min-width: 60px;
+  min-height: 60px;
+  padding: 0;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.56);
+  background: rgba(247, 250, 250, 0.72);
+  color: #193035;
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow:
+    0 14px 26px rgba(9, 23, 24, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.quick-nav-button:hover {
+  background: rgba(252, 254, 254, 0.82);
+}
+
+.quick-nav-button:active {
+  transform: translateY(1px) scale(0.985);
+}
+
 #mainCanvas {
   display: block;
   width: 100%;
@@ -474,5 +523,17 @@ input[type="range"] {
 
   .canvas-wrap {
     min-height: 52vh;
+  }
+
+  .quick-nav-panel {
+    left: 10px;
+    gap: 14px;
+  }
+
+  .quick-nav-button {
+    width: 54px;
+    min-width: 54px;
+    min-height: 54px;
+    border-radius: 16px;
   }
 }

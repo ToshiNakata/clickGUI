@@ -50,6 +50,16 @@
         </div>
 
         <div id="canvasWrap" class="canvas-wrap">
+          <div class="quick-nav-panel" aria-label="クイック操作パネル">
+            <div class="quick-nav-group" role="group" aria-label="フレーム操作">
+              <button id="quickPrevFrame" class="quick-nav-button" type="button">&lt;</button>
+              <button id="quickNextFrame" class="quick-nav-button" type="button">&gt;</button>
+            </div>
+            <div class="quick-nav-group quick-nav-group-spaced" role="group" aria-label="ID操作">
+              <button id="quickPrevId" class="quick-nav-button" type="button">-</button>
+              <button id="quickNextId" class="quick-nav-button" type="button">+</button>
+            </div>
+          </div>
           <canvas id="mainCanvas"></canvas>
           <div id="canvasEmpty" class="canvas-empty">動画を読み込んでください</div>
         </div>
